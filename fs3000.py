@@ -403,6 +403,8 @@ class CCFS3000RESTClient(object):
             raise exception.VolumeBackendAPIException(data=msg)
 
         err, resp = self.request(url_para)
+        if err:
+            return -1
         host_lun = 0
         resp.sort()
         for used_lun in resp:
