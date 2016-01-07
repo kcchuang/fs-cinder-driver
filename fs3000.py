@@ -42,6 +42,8 @@ from cinder.volume import manager
 from cinder.volume import utils as vol_utils
 from cinder.volume import volume_types
 from cinder.zonemanager import utils as zm_utils
+from cinder import utils
+from cinder.volume.drivers.infortrend.eonstor_ds_cli import cli_factory as cli
 
 LOG = logging.getLogger(__name__)
 
@@ -304,6 +306,12 @@ class CCFS3000RESTClient(object):
                          'action' : 'getDetail'}
         err, resp = self.request(url_parameter)
         return None if err else resp
+    def get_active_fc_wwns(self, initiator):
+        url_parameter = {'service' : 'FCLunMappingService',
+                         'action' : 'getTargetPortNameByInitator',
+                         'wwn' : initiator}
+        err, resp = self.request(url_parameter)
+        return resp
 
     def create_lun(self, pool_id, name, size, **kwargs):
         url_para = {'service' : 'LvService',
@@ -363,65 +371,87 @@ class CCFS3000RESTClient(object):
         err, resp = self._request(initiator_register_url, data)
         return err, resp
 
-    def expose_lun_fs(self, lun_id, initiator):
-        url_para = {'service' : 'LunMappingService',
-                    'action' : 'echoUsedLunsByInitiator',
-                    'initiator' : initiator}
+    def get_host_lun_by_ends(self, host_id, lun_id,
+                             protocol):
+        if protocol == 'FC':
+            url_para = {'service' : 'FCLunMappingService',
+                        'action' : 'getAllFCLunMappings'}
+        elif protocol == 'iSCSI':
+            url_para = {'service' : 'LunMappingService',
+                        'action' : 'getAllFS3000LunMappings'}
         err, resp = self.request(url_para)
-        lun_no = 0
+        LOG.debug("lun map %s", resp)
+        if err:
+            return -1
+        for mapping in resp:
+            if (mapping['lvId'] == lun_id):
+                return mapping['lunNumber']
+
+    def _get_avail_host_lun(self, protocol, initiator):
+        if protocol == 'FC':
+            url_para = {'service' : 'FCLunMappingService',
+                        'action' : 'echoUsedLunsByWWN',
+                        'wwn' : initiator}
+        elif protocol == 'iSCSI':
+            url_para = {'service' : 'LunMappingService',
+                        'action' : 'echoUsedLunsByInitiator',
+                        'initiator' : initiator}
+        else:
+            msg = _('storage_protocol %(invalid)s is not supported. '
+                    ) % {'invalid': protocol}
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+
+        err, resp = self.request(url_para)
+        host_lun = 0
         resp.sort()
         for used_lun in resp:
-            if (lun_no == int(used_lun)):
-                lun_no += 1
+            if (host_lun == int(used_lun)):
+                host_lun += 1
+        
+        LOG.debug("take host_lun %s, used_lun %s",host_lun, resp)
+        return host_lun
 
-        url_para = {'service' : 'LunMappingService',
-                    'action' : 'createLunMappingWithChapUser',
-                    'lvId' : lun_id,
-                    'lunNumber' : lun_no,
-                    'initiator' : initiator}
+    def expose_lun(self, lun_id, initiator, protocol):
+        host_lun = self._get_avail_host_lun(protocol, initiator)
+        LOG.debug("expose_lun lun_id %s init %s host_lun %s",
+            lun_id, initiator, host_lun)
+        if protocol == 'FC':
+            url_para = {'service' : 'FCLunMappingService',
+                        'action' : 'createFCLunMapping',
+                        'lvId' : lun_id,
+                        'lunNumber' : host_lun,
+                        'wwn' : initiator}
+        elif protocol == 'iSCSI':
+            url_para = {'service' : 'LunMappingService',
+                        'action' : 'createLunMappingWithChapUser',
+                        'lvId' : lun_id,
+                        'lunNumber' : host_lun,
+                        'initiator' : initiator}
+        else:
+            msg = _('storage_protocol %(invalid)s is not supported. '
+                    ) % {'invalid': protocol}
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
         err, resp = self.request(url_para)
-        return err, lun_no
-
-    def expose_lun(self, lun_id, lun_cg, current_host_access, host_id):
-        lun_modify_url = (
-            '/api/instances/storageResource/%s/action/modifyLun' % lun_id)
-        host_access_list = current_host_access if current_host_access else []
-        host_access_list = filter(lambda entry: entry['host']['id'] != host_id,
-                                  host_access_list)
-        host_access_list.append(
-            {'host': {'id': host_id},
-             'accessMask': self.HostLUNAccessEnum_Production})
-        if lun_cg:
-            lun_modify_url = (
-                '/api/instances/storageResource/%s/action/modifyLunGroup' % lun_cg)
-            data = {"lunModify": [
-                {'lun': {'id': lun_id},
-                 'lunParameters': {'hostAccess': host_access_list}}]}
-        else:
-            data = {'lunParameters': {'hostAccess': host_access_list}}
-        err, resp = self._request(lun_modify_url, data)
         return err, resp
 
-    def hide_lun(self, lun_id, lun_cg, current_host_access, host_id):
-        lun_modify_url = (
-            '/api/instances/storageResource/%s/action/modifyLun' % lun_id)
-
-        host_access_list = current_host_access if current_host_access else []
-        host_access_list = filter(lambda entry: entry['host']['id'] != host_id,
-                                  host_access_list)
-        host_access_list.append(
-            {'host': {'id': host_id},
-             'accessMask': self.HostLUNAccessEnum_NoAccess})
-        if lun_cg:
-            lun_modify_url = (
-                '/api/instances/storageResource/%s/action/modifyLunGroup' % lun_cg)
-            data = {"lunModify": [
-                {'lun': {'id': lun_id},
-                 'lunParameters': {'hostAccess': host_access_list}}]}
-        else:
-            data = {'lunParameters': {'hostAccess': host_access_list}}
-        err, resp = self._request(lun_modify_url, data)
-        return err, resp
+    def hide_lun(self, lun_id, host_id, protocol):
+        LOG.debug("hide_lun lun_id %s, host_id %s, proto %s",
+            lun_id, host_id, protocol)
+        host_lun = self.get_host_lun_by_ends(host_id, lun_id, protocol)
+        if protocol == 'FC':
+            url_para = {'service' : 'FCLunMappingService',
+                        'action' : 'deleteFCLunMapping',
+                        'lunNumber' : host_lun,
+                        'wwn' : host_id}
+        elif protocol == 'iSCSI':
+            url_para = {'service' : 'LunMappingService',
+                        'action' : 'deleteLunMappingWithChapUser',
+                        'lunNumber' : host_lun,
+                        'initiator' : host_id}
+        err, resp = self.request(url_para)
+        return err,resp
 
     def create_snap(self, lun_id, snap_name, lun_size, snap_description=None):
         url_para = {'service' : 'LvService',
@@ -522,8 +552,8 @@ class GetConnectionInfoTask(task.Task):
                    'host': host_id})
         return self.helper.get_connection_info(self.volume,
                                                self.connector,
-                                               self.lun_data['currentNode'],
-                                               self.lun_data['id'],
+                                               #self.lun_data['currentNode'],
+                                               self.lun_data['Id'],
                                                host_id)
 
 
@@ -557,6 +587,7 @@ class CCFS3000Helper(object):
         self.max_over_subscription_ratio = (
             self.configuration.max_over_subscription_ratio)
         self.lookup_service_instance = None
+        self.lookup_service = zm_utils.create_lookup_service()
         # Here we use group config to keep same as cinder manager
         zm_conf = Configuration(manager.volume_manager_opts)
         if (zm_conf.safe_get('zoning_mode') == 'fabric' or
@@ -660,11 +691,11 @@ class CCFS3000Helper(object):
                 LOG.warning(_LW('SP of %s is unknown'), port['id'])
         return res
 
-    def _get_storage_targets(self):
+    def _get_storage_targets(self, connector):
         if self.storage_protocol == 'iSCSI':
-            return self._get_iscsi_targets()
+            return self._get_iscsi_targets(connector)
         elif self.storage_protocol == 'FC':
-            return self._get_fc_targets()
+            return self._get_fc_targets(connector)
         else:
             return {'a': [], 'b': []}
 
@@ -855,16 +886,17 @@ class CCFS3000Helper(object):
         registered_initiators = []
         orphan_initiators = []
         new_initiator_uids = []
-        for initiator_uid in initiator_uids:
-            initiator = self.client.get_initiator_by_uid(initiator_uid)
-            if initiator:
-                initiator = initiator[0]
-                if 'parentHost' in initiator and initiator['parentHost']:
-                    registered_initiators.append(initiator)
-                else:
-                    orphan_initiators.append(initiator)
-            else:
-                new_initiator_uids.append(initiator_uid)
+        registered_initiators = initiator_uids
+        #for initiator_uid in initiator_uids:
+        #    initiator = self.client.get_initiator_by_uid(initiator_uid)
+        #    if initiator:
+        #        initiator = initiator[0]
+        #        if 'parentHost' in initiator and initiator['parentHost']:
+        #            registered_initiators.append(initiator)
+        #        else:
+        #            orphan_initiators.append(initiator)
+        #    else:
+        #        new_initiator_uids.append(initiator_uid)
         return registered_initiators, orphan_initiators, new_initiator_uids
 
     def _extract_host_id(self, registered_initiators, hostname=None):
@@ -926,53 +958,27 @@ class CCFS3000Helper(object):
         return target_wwns, init_targ_map
 
     def arrange_host(self, connector):
-        registered_initiators, orphan_initiators, new_initiator_uids = \
-            self._categorize_initiators(connector)
-        host_id = self._extract_host_id(registered_initiators,
-                                        connector['host'])
+        # TODO kevin, single WWPNS now
+        if self.storage_protocol == 'FC':
+            host_id = str(connector['wwpns'][0]).upper()
+        elif self.storage_protocol == 'iSCSI':
+            host_id = connector['initiator']
         if host_id is None:
-            err, host = self.client.create_host(connector['host'])
+            msg = _('initiator/wwpns is none %s.') % connector
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+            host_id = ''
 
-            if err:
-                msg = _('Failed to create host %s.') % connector['host']
-                LOG.error(msg)
-                raise exception.VolumeBackendAPIException(data=msg)
-            host_id = host['id']
-
-        self._create_initiators(new_initiator_uids, host_id)
-        self._register_initiators(orphan_initiators, host_id)
         return host_id
 
     def expose_lun(self, volume, lun_data, host_id):
-        lun_id = lun_data['id']
-        lun_cg = (self._get_group_id_by_name(volume.get('consistencygroup_id'))
-                  if volume.get('consistencygroup_id') else None)
-        host_access = (lun_data['hostAccess'] if 'hostAccess' in lun_data
-                       else [])
-        if self.lookup_service_instance and self.storage_protocol == 'FC':
-            @lockutils.synchronized('emc-vnxe-host-' + host_id,
-                                    "emc-vnxe-host-", True)
-            def _expose_lun():
-                return self.client.expose_lun(lun_id,
-                                              lun_cg,
-                                              host_access,
-                                              host_id)
+        LOG.debug('expose_lun, v %s, lun %s, hostid %s',
+            volume, lun_data, host_id)
+        lun_id = lun_data['Id']
+        err, resp = self.client.expose_lun(lun_id, host_id, self.storage_protocol)
 
-            err, resp = _expose_lun()
-        else:
-            err, resp = self.client.expose_lun(lun_id,
-                                               lun_cg,
-                                               host_access,
-                                               host_id)
         if err:
-            if err['errorCode'] in (0x6701020,):
-                LOG.warning(_LW('LUN %(lun)s backing %(vol)s had been '
-                            'exposed to %(host)s.'),
-                            {'lun': lun_id, 'vol': lun_data['name'],
-                             'host': host_id})
-                return
-            msg = _('Failed to expose %(lun)s to %(host)s.') % \
-                {'lun': lun_id, 'host': host_id}
+            msg = _('expose_lun error %s.') % err
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
 
@@ -994,86 +1000,114 @@ class CCFS3000Helper(object):
         return {'initiator_target_map': init_targ_map,
                 'target_wwn': target_wwns}
 
-    def get_connection_info(self, volume, connector, current_sp_node,
+    def get_connection_info(self, volume, connector,
                             lun_id, host_id):
+
         data = {'target_discovered': True,
                 'target_lun': 'unknown',
                 'volume_id': volume['id']}
 
-        spa_targets = list(self.storage_targets['a'])
-        spb_targets = list(self.storage_targets['b'])
-        random.shuffle(spa_targets)
-        random.shuffle(spb_targets)
-        # Owner SP is preferred
-        if current_sp_node == 0:
-            targets = spa_targets + spb_targets
-        else:
-            targets = spb_targets + spa_targets
-
-        if not targets:
-            msg = _('Connection information is unavailable '
-                    'because no target ports are available in the system.')
-            LOG.error(msg)
-            raise exception.VolumeBackendAPIException(data=msg)
-        host_lun = self.client.get_host_lun_by_ends(host_id, lun_id,
-                                                    fields=('hlu',))
-        if not host_lun or 'hlu' not in host_lun[0]:
-            msg = _('Can not get the hlu information of host %s.') % host_id
-            LOG.error(msg)
-            raise exception.VolumeBackendAPIException(data=msg)
-        data['target_lun'] = host_lun[0]['hlu']
+        host_lun = self.client.get_host_lun_by_ends(host_id, lun_id, 
+                                                    self.storage_protocol)
+        data['target_lun'] = host_lun
         if self.storage_protocol == 'iSCSI':
-            data['target_iqn'] = targets[0][0]
-            data['target_portal'] = '%s:3260' % targets[0][1]
-            data['target_iqns'] = [t[0] for t in targets]
-            data['target_portals'] = ['%s:3260' % t[1] for t in targets]
-            data['target_luns'] = [host_lun[0]['hlu']] * len(targets)
+            err, target_iqns, target_portals = self._do_iscsi_discovery(self.active_storage_ip)
+            data['target_iqn'] = target_iqns[0]
+            data['target_portal'] = target_portals[0]
+            # TODO kevin, for multi-connection
+            #data['target_iqns'] = target_iqns
+            #data['target_portals'] = target_portals
+            #data['target_luns'] = [host_lun[0]['hlu']] * len(targets)
         elif self.storage_protocol == 'FC':
-            host = self.client.get_host_by_id(host_id,
-                                              ('fcHostInitiators',))
-            if not host or not host[0]['fcHostInitiators']:
-                msg = _('Connection information is unavailable because '
-                        'no FC initiator can access resources in %s') % host_id
-                LOG.error(msg)
-                raise exception.VolumeBackendAPIException(data=msg)
-            host = host[0]
-            logined_fc_set = set()
-            for initiator in host['fcHostInitiators']:
-                paths = self.client.get_initiator_paths_by_initiator_id(
-                    initiator['id'], ('fcPort', 'isLoggedIn'))
-                for path in paths:
-                    if path['isLoggedIn']:
-                        logined_fc_set.add(path['fcPort']['id'])
-            if self.lookup_service_instance:
-                zone_info = self._get_fc_zone_info(connector, targets)
-                data.update(zone_info)
-            else:
-                accessible_targets = filter(lambda entry:
-                                            entry[2] in logined_fc_set,
-                                            targets)
-                if not accessible_targets:
-                    msg = _('Connection information is unavailable '
-                            'because no FC initiator in %s has paths '
-                            'to the system.') % host_id
-                    LOG.error(msg)
-                    raise exception.VolumeBackendAPIException(data=msg)
-                data['target_wwn'] = map(lambda entry: entry[1],
-                                         accessible_targets)
-            LOG.debug('FC Target WWNs accessible to %(host)s: %(targets)s.'
-                      % {'host': connector['host'],
-                         'targets': data['target_wwn']})
+            zone_info = self._build_initiator_target_map(connector)
+            LOG.debug("zone_info %s", zone_info)
+            data.update(zone_info)
 
         connection_info = {
             'driver_volume_type': self._get_driver_volume_type(),
             'data': data}
         return json.dumps(connection_info)
 
+    def _execute_command(self, cli_type, *args, **kwargs):
+        command = getattr(cli, cli_type)
+        cli_conf = {
+            'cli_retry_time': 2,
+        }
+ 
+        return command(cli_conf).execute(*args, **kwargs)
+ 
+    def _execute(self, cli_type, *args, **kwargs):
+        LOG.debug('Executing command type: %(type)s.', {'type': cli_type})
+ 
+        rc, out = self._execute_command(cli_type, *args, **kwargs)
+ 
+        if rc != 0:
+            raise exception.VolumeBackendAPIException(data=ec)
+ 
+        return rc, out
+ 
+    def _do_iscsi_discovery(self, target_ip):
+        rc, targets = self._execute(
+            'ExecuteCommand',
+            'iscsiadm', '-m', 'discovery',
+            '-t', 'sendtargets', '-p',
+            target_ip,
+            run_as_root=True)
+ 
+        target_iqns = []
+        target_portals = []
+        if rc != 0:
+            LOG.error(_LE(
+                'Can not discovery in %(target_ip)s.'), {
+                    'target_ip': target_ip})
+            return (False, target_iqns, target_portals)
+        else:
+            for target in targets.splitlines():
+                words = target.split(" ")
+                target_iqns.append(words[1])
+                target_portals.append(words[0].split(",")[0])
+
+            LOG.debug("target_iqns %s, portals %s",
+                target_iqns, target_portals)
+            return (True, target_iqns, target_portals)
+ 
+        return (False, target_iqns, target_portals)
+
+    def _convert_wwns_fs3000_to_openstack(self, wwns):
+        """Convert a list of FS3000 WWNs to OpenStack compatible WWN strings.
+
+        Input format is '50:01:43:80:18:6b:3f:65', output format
+        is '50014380186b3f65'.
+
+        """
+        output = []
+        for w in wwns:
+            output.append(str(''.join(w[0:].split(':'))))
+        return output
+
+    def _build_initiator_target_map(self, connector):
+        """Build the target_wwns and the initiator target map."""
+        target_wwns = []
+        init_targ_map = {}
+
+        initiator_wwns = connector['wwpns']
+        for initiator in initiator_wwns:
+	    active_wwns = self.client.get_active_fc_wwns(str(initiator).upper())
+            active_wwns =(self._convert_wwns_fs3000_to_openstack(active_wwns))
+            LOG.debug("active_wwns %s", active_wwns)
+            target_wwns = active_wwns
+            init_targ_map[str(initiator).upper()] = target_wwns
+
+        return {'initiator_target_map': init_targ_map,
+                'target_wwn': target_wwns}
+
     def initialize_connection(self, volume, connector):
+
         flow_name = 'initialize_connection'
         volume_flow = linear_flow.Flow(flow_name)
         lun_id = self._extra_lun_or_snap_id(volume)
-        lun_data = self.get_lun_by_id(lun_id)
-        volume_flow.add(#ArrangeHostTask(self, connector),
+        err, lun_data = self.client.get_lun_by_id(lun_id)
+        volume_flow.add(ArrangeHostTask(self, connector),
                         ExposeLUNTask(self, volume, lun_data),
                         GetConnectionInfoTask(self, volume, lun_data,
                                               connector))
@@ -1084,15 +1118,10 @@ class CCFS3000Helper(object):
         return json.loads(flow_engine.storage.fetch('connection_info'))
 
     def hide_lun(self, volume, lun_data, host_id):
-        lun_id = lun_data['id']
-        lun_cg = (self._get_group_id_by_name(volume.get('consistencygroup_id'))
-                  if volume.get('consistencygroup_id') else None)
-        host_access = (lun_data['hostAccess'] if 'hostAccess' in lun_data
-                       else [])
+        lun_id = lun_data['Id']
         err, resp = self.client.hide_lun(lun_id,
-                                         lun_cg,
-                                         host_access,
-                                         host_id)
+                                         host_id,
+                                         self.storage_protocol)
         if err:
             if err['errorCode'] in (0x6701020,):
                 LOG.warning(_LW('LUN %(lun)s backing %(vol) had been '
@@ -1121,18 +1150,19 @@ class CCFS3000Helper(object):
 
     def terminate_connection(self, volume, connector, **kwargs):
         lun_id = self._extra_lun_or_snap_id(volume)
-        registered_initiators, orphan_initiators, new_initiator_uids = \
-            self._categorize_initiators(connector)
-        host_id = self._extract_host_id(registered_initiators,
-                                        connector['host'])
-        if not host_id:
-            LOG.warning(_LW("Host using %s is not found."), volume['name'])
-        else:
-            lun_data = self.get_lun_by_id(lun_id)
-            self.hide_lun(volume, lun_data, host_id)
-
-        if self.lookup_service_instance and self.storage_protocol == 'FC':
-            return self.get_fc_zone_info_for_empty_host(connector, host_id)
+        #kevin TODO, TBD for multi-conn
+        if self.storage_protocol == 'FC':
+            host_id = str(connector['wwpns'][0]).upper()
+        elif self.storage_protocol == 'iSCSI':
+            host_id = connector['initiator']
+        host_lun = self.client.get_host_lun_by_ends(
+            host_id, lun_id, self.storage_protocol)
+        err, lun_data = self.client.get_lun_by_id(lun_id)
+        LOG.debug("lun_id %s, host_id %s, host_lun %s, lun_data %s",
+            lun_id, host_id, host_lun, lun_data)
+        self.hide_lun(volume, lun_data, host_id)
+        if self.storage_protocol == 'FC':
+            return self._build_initiator_target_map(connector)
         else:
             return
 
@@ -1301,13 +1331,11 @@ class CCFS3000Driver(san.SanDriver):
 
     @zm_utils.AddFCZone
     def initialize_connection(self, volume, connector):
-	pass
-        #return self.helper.initialize_connection(volume, connector)
+        return self.helper.initialize_connection(volume, connector)
 
     @zm_utils.RemoveFCZone
     def terminate_connection(self, volume, connector, **kwargs):
-	pass
-        #return self.helper.terminate_connection(volume, connector)
+        return self.helper.terminate_connection(volume, connector)
 
     def get_volume_stats(self, refresh=False):
         return self.helper.get_volume_stats(refresh)
