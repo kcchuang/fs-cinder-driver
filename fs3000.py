@@ -1,4 +1,4 @@
-# Copyright (c) 2014 - 2015 CarryCloud Corporation.
+# Copyright (c) 2015 - 2016 Fortunet Corporation.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -13,7 +13,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 """
-Drivers for CarryCloud FS3000 array based on RESTful API.
+Drivers for Frotunet FS3000 array based on RESTful API.
 """
 
 import cookielib
@@ -46,7 +46,6 @@ from cinder import utils
 from cinder.volume.drivers.infortrend.eonstor_ds_cli import cli_factory as cli
 
 LOG = logging.getLogger(__name__)
-
 
 CONF = cfg.CONF
 VERSION = '00.00.01'
@@ -111,7 +110,7 @@ def log_enter_exit(func):
 
 @decorate_all_methods(log_enter_exit)
 class CCFS3000RESTClient(object):
-    """CarryCloud FS3000 Client interface handing REST calls and responses."""
+    """Fortunet FS3000 Client interface handing REST calls and responses."""
 
     HEADERS = {'Accept': 'application/json',
                'Content-Type': 'application/json'}
@@ -567,7 +566,7 @@ class CCFS3000Helper(object):
              'free_capacity_gb': 'unknown',
              'reserved_percentage': 0,
              'total_capacity_gb': 'unknown',
-             'vendor_name': 'CarryCloud',
+             'vendor_name': 'Fortunet',
              'volume_backend_name': None}
 
     def __init__(self, conf):
@@ -1195,7 +1194,7 @@ class CCFS3000Helper(object):
         data['volume_backend_name'] = backend_name or 'CCFS3000Driver'
         data['storage_protocol'] = self.storage_protocol
         data['driver_version'] = VERSION
-        data['vendor_name'] = "CarryCloud"
+        data['vendor_name'] = "Fortunet"
 
         pools = self.client.get_pools()
         if not self.is_managing_all_pools:
@@ -1273,7 +1272,7 @@ class CCFS3000Helper(object):
 
 @decorate_all_methods(log_enter_exit)
 class CCFS3000Driver(san.SanDriver):
-    """CarryCloud FS3000 Driver."""
+    """Fortunet FS3000 Driver."""
 
     def __init__(self, *args, **kwargs):
 
