@@ -819,7 +819,7 @@ class CCFS3000Helper(object):
         if err:
             raise exception.VolumeBackendAPIException(data=err['messages'])
         elif not snap:
-	    err_msg = 'can not get snapshot %(name)s by lun_id %(lun_id)s' % 
+	    err_msg = 'can not get snapshot %(name)s by lun_id %(lun_id)s' %\
 			{'name': name, 'lun_id': lun_id}
             raise exception.VolumeBackendAPIException(data=err_msg)
 
@@ -1013,8 +1013,8 @@ class CCFS3000Helper(object):
 			self.storage_protocol)
         data['target_lun'] = host_lun
         if self.storage_protocol == 'iSCSI':
-            err, target_iqns, target_portals = 
-				self._do_iscsi_discovery(self.active_storage_ip)
+            err, target_iqns, target_portals =\
+		self._do_iscsi_discovery(self.active_storage_ip)
             data['target_iqn'] = target_iqns[0]
             data['target_portal'] = target_portals[0]
             # TODO kevin, for multi-connection
