@@ -21,6 +21,6 @@ cp ./test_fs3000.py $CINDER_DIR/$CINDER_TEST_DIR/ -r
 cd $CINDER_DIR
 
 ./run_tests.sh -V test_fs3000
-./run_tests.sh -p
+#./run_tests.sh -p
 
 cd ..
