@@ -46,7 +46,7 @@ class CCFS3000DriverTestData(object):
 
     @staticmethod
     def req_create_lun(pool_id, name, size, is_thin):
-        url_para = {'service': 'LvService',
+        url_para = {'service': 'LvServices',
                     'action': 'createLv',
                     'name': name,
                     'vgId': pool_id,
