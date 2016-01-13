@@ -193,7 +193,7 @@ class CCFS3000DriverTestData(object):
 #                    ['{}:3260'.format(tgt[1]) for tgt in td.iscsi_targets[r]])
 #        return portals
 
-    lun_id_default = 'sv_1'
+    lun_id_default = 'sv_2'
 #    lun_data_default = {'id': lun_id_default,
 #                        'name': 'volume-xxx',
 #                        'type': 2,
