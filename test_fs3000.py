@@ -13,7 +13,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-
 import mock
 
 import urllib2
@@ -1074,7 +1073,7 @@ class CCFS3000iSCSIDriverTestCase(CCFS3000DriverTestCase):
         model_update = self.driver.create_volume(TD.os_vol_default)
         expected_calls = [
             TD.req_create_lun(TD.os_vol_default['pool'],
-                              "%s-%s" % (TD.os_vol_default['display_name'],
+                              "%s -%s" % (TD.os_vol_default['display_name'],
                                          TD.os_vol_default['name']),
                               TD.os_vol_default['size'], False),
             TD.req_get_luns()]
