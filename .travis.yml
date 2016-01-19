@@ -13,12 +13,9 @@ before_script:
 
 notifications:
   email:
-    - kcchuang.white@gmail.com
-    - kcchuang.white@gmail.com
-notifications:
-  email:
     recipients:
       - kcchuang.white@gmail.com
+      - kevin@fortunet.com.cn
     on_success: always # default: change
     on_failure: always # default: always
 
