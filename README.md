@@ -1,4 +1,3 @@
-//test
 FS Cinder Driver 2rebase
 ==================
 For development only.
