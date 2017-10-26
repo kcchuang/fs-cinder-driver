@@ -1,6 +1,5 @@
-//test2
 //test
-FS Cinder Driver
+FS Cinder Driver 2rebase
 ==================
 For development only.
 
